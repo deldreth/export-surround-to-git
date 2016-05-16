@@ -5,6 +5,11 @@ Python script to export history from Seapine Surround in a format parsable by `g
 
 This method is capable of preserving complete history, timestamps, authors, comments, branches, snapshots, etc.
 
+# Disclaimer of Fork
+The changes here represent an 'acceptable' use case for my organization. Certain functionality
+like handling renames and deletes (https://github.com/JElchison/export-surround-to-git/issues/34)
+are not handled by these changes. We accepted and were tolerant of limited history as part 
+of our migration from Seapine Surround.
 
 # Usage
 ```
