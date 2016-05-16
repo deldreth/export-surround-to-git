@@ -205,7 +205,7 @@ def find_all_file_versions(mainline, branch, path):
 
     repo, file = os.path.split(path)
 
-    cmd = 'sscm history /"%s" -b"%s" -p"%s" | tail -n +1' % (file, branch, repo)
+    cmd = 'sscm history /"%s" -b"%s" -p"%s" | tail -n +2' % (file, branch, repo)
     lines = get_lines_from_sscm_cmd(cmd)
 
     # this is complicated because the comment for a check-in will be on the line *following* a regex match
@@ -217,12 +217,10 @@ def find_all_file_versions(mainline, branch, path):
 
         if bFoundOne:
             # before processing this match, we need to commit the previously found version
-            # print('appending: %s %s %s %s %s %s %s' % (timestamp, action, origFile, int(version), author, comment, data))
             versionList.append((timestamp, action, origFile, int(version), author, comment, data))
 
         result = histRegex.search(line)
         if result:
-            # print('\nline match:\n' + line)
             # we have a new match.
             # sys.stderr.write("\n******* line match!")
 
@@ -248,8 +246,6 @@ def find_all_file_versions(mainline, branch, path):
             else:
                 # we're (possibly) in a branch scenario
                 data = result.group("data")
-
-            # print('will append:\n %s %s %s %s %s %s %s' % (timestamp, action, origFile, int(version), author, comment, data))
         else:
             # no match.  this must be a comment line (or the start of a new history line, with a line break).
             #sys.stderr.write("\n------- no line match")
@@ -351,8 +347,11 @@ def cmd_parse(mainline, path, database):
 
     branches = find_all_branches_in_mainline_containing_path(mainline, path)
 
-    # NOTE how we're passing branches, not branch.  this is to detect deleted files.
-    filesToWalk = find_all_files_in_branches_under_path(mainline, branches, path)
+    # NOTE how we're passing branches, not branch.
+    # this is to detect deleted files.
+    filesToWalk = find_all_files_in_branches_under_path(mainline,
+                                                        branches,
+                                                        path)
 
     for branch in branches:
         sys.stderr.write("\n[*] Parsing branch '%s' ..." % branch)
@@ -360,37 +359,43 @@ def cmd_parse(mainline, path, database):
         for fullPathWalk in filesToWalk:
             sys.stderr.write("\n[*] \tParsing file '%s' ..." % fullPathWalk)
 
-            pathWalk, fileWalk = os.path.split(fullPathWalk)
+            # Pathing was being pulled out but never used
+            realPath = fullPathWalk.split('current')[0]
+            pathWalk, fileWalk = os.path.split(realPath)
 
             versions = find_all_file_versions(mainline, branch, fullPathWalk)
-            # sys.stderr.write("\n[*] \t\tversions = %s" % versions)
 
-            for timestamp, action, origPath, version, author, comment, data in versions:
-                # print ('surround: timestamp:%s action:%s origPath:%s author:%s comment:%s' %
-                       # (timestamp, action, origPath, author, comment))
+            for (timestamp, action, origPath, version,
+                 author, comment, data) in versions:
 
-                # if action == 'admin modules':
-                #     continue
-                epoch = int(time.mktime(time.strptime(timestamp, "%m/%d/%Y %I:%M %p")))
+                # Renamed and moved are breaking in our case.
+                # Also, share and break share are not git or mother approved
+                if (action == 'renamed' or action == 'moved' or
+                   action == 'share' or action == 'break share'):
+                    continue
+
+                epoch = int(time.mktime(time.strptime(
+                            timestamp, "%m/%d/%Y %I:%M %p")))
                 # branch operations don't follow the actionMap
                 if action == "add to branch":
                     if is_snapshot_branch(data, pathWalk):
                         branchAction = Actions.BRANCH_SNAPSHOT
                     else:
                         branchAction = Actions.BRANCH_BASELINE
-                    add_record_to_database(DatabaseRecord((epoch, branchAction, mainline, branch, path, None, version, author, comment, data)), database)
+                    add_record_to_database(
+                        DatabaseRecord(
+                            (epoch, branchAction,
+                             mainline, branch, path,
+                             None, version, author, comment, data)
+                            ),
+                        database)
                 else:
-                    if origPath:
-                        if action == "renamed":
-                            origFullPath = os.path.join(pathWalk, origPath)
-                            data = os.path.join(pathWalk, data)
-                        elif action == "moved":
-                            origFullPath = os.path.join(origPath, fileWalk)
-                            data = os.path.join(data, fileWalk)
-                    else:
-                        origFullPath = None
-
-                    add_record_to_database(DatabaseRecord((epoch, actionMap[action], mainline, branch, fullPathWalk, origFullPath, version, author, comment, data)), database)
+                    add_record_to_database(
+                        DatabaseRecord(
+                            (epoch, actionMap[action], mainline, branch,
+                             fileWalk, pathWalk, version, author,
+                             comment, data)),
+                        database)
 
     sys.stderr.write("\n[+] Parse phase complete")
 
