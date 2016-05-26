@@ -55,7 +55,7 @@ import shutil
 #
 
 # temp directory in cwd, holds files fetched from Surround
-scratchDir = "scratch"
+scratchDir = "scratch/"
 
 # for efficiency, compile the history regex once beforehand
 histRegex = re.compile(r"^(?P<action>[\w]+([^\[\]\r\n]*[\w]+)?)(\[(?P<data>[^\[\]\r\n]*?)( v\. [\d]+)?\]| from \[(?P<from>[^\[\]\r\n]*)\] to \[(?P<to>[^\[\]\r\n]*)\])?([\s]+)(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)([\s]+)(?P<version>[\d]+)([\s]+)(?P<timestamp>[\w]+[^\[\]\r\n]*)$", re.MULTILINE | re.DOTALL)
@@ -77,6 +77,7 @@ class Actions:
     FILE_MODIFY = 3
     FILE_DELETE = 4
     FILE_RENAME = 5
+
 
 # map between Surround action and Action enum
 actionMap = {"add"                   : Actions.FILE_MODIFY,
@@ -196,33 +197,65 @@ def is_snapshot_branch(branch, repo):
         result = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=fnull).communicate()[0]
     return result.find("snapshot") != -1
 
+# def parse_the_line(matching_regex):
+#     bFoundOne = True
+#     action = result.group("action")
+#     origFile = result.group("from")
+#     to = result.group("to")
+#     author = result.group("author")
+#     version = result.group("version")
+#     timestamp = result.group("timestamp")
+
+#     if version == previous_version:
+#         index += 1
+#         continue
+
+#     print ("\n Versions %s <=> %s" % (previous_version, version))
+#     previous_version = version
+
+#     try:
+#         comment_line = lines[index + 1]
+#         comment = re.sub("^ Comments \- ", "", comment_line, count=1)
+#     except IndexError:
+#         comment = None
+
+#     try:
+#         time.strptime(timestamp, "%m/%d/%Y %I:%M %p")
+#     except ValueError:
+#         bFoundOne = False
+
+#     if origFile and to:
+#         # we're in a rename/move scenario
+#         data = to
+#     else:
+#         # we're (possibly) in a branch scenario
+#         data = result.group("data")
+
+#     versionList.append((timestamp, action, origFile,
+#                         int(version), author, comment, data))
+
 
 def find_all_file_versions(mainline, branch, path):
     path = path.split('current')[0].strip()
 
     repo, file = os.path.split(path)
 
-    cmd = 'sscm history /"%s" -b"%s" -p"%s" | tail -n +2' % (file, branch, repo)
-    lines = get_lines_from_sscm_cmd(cmd)
+    cmd = 'sscm history "%s" -b"%s" -p"%s"' % (file, branch, repo)
 
     # this is complicated because the comment for a check-in will be on the line *following* a regex match
     versionList = []
     comment = None
     bFoundOne = False
-    for line in lines:
-        #sys.stderr.write("\n=== Trying line = " + line)
+    previous_version = None
+    index = 0
 
-        if bFoundOne:
-            # before processing this match, we need to commit the previously found version
-            versionList.append((timestamp, action, origFile, int(version), author, comment, data))
+    lines = get_lines_from_sscm_cmd(cmd)
+    lines = lines[4:len(lines)]
+    for line in lines:
+        line = re.sub(r"\(Changelist: .+\)", ' ', line)
 
         result = histRegex.search(line)
         if result:
-            # we have a new match.
-            # sys.stderr.write("\n******* line match!")
-
-            # set bFoundOne once we've found our first version
-            bFoundOne = True
             action = result.group("action")
             origFile = result.group("from")
             to = result.group("to")
@@ -230,80 +263,84 @@ def find_all_file_versions(mainline, branch, path):
             version = result.group("version")
             timestamp = result.group("timestamp")
 
+            if version == previous_version:
+                index += 1
+                continue
+
+            previous_version = version
+
+            try:
+                comment_line = lines[index + 1]
+                comment = re.sub("^ Comments \- ", "", comment_line, count=1)
+            except IndexError:
+                comment = None
+
             try:
                 time.strptime(timestamp, "%m/%d/%Y %I:%M %p")
             except ValueError:
-                bFoundOne = False
+                index += 1
+                continue
 
-            # reset comment
-            comment = None
             if origFile and to:
                 # we're in a rename/move scenario
                 data = to
             else:
                 # we're (possibly) in a branch scenario
                 data = result.group("data")
+
+            print(version, ':', timestamp, action, origFile, version, author, comment)
+            versionList.append((timestamp, action, origFile,
+                                int(version), author, comment, data))
         else:
-            # no match.  this must be a comment line (or the start of a new history line, with a line break).
-            #sys.stderr.write("\n------- no line match")
-            if not comment:
-                # start of comment
-                comment = re.sub("^ Comments \- ", "", line, count=1)
-            # else:
-            #     # continuation of comment
-            #     # comment += "\n" + line
+            try:
+                next_line = lines[index + 1]
+            except IndexError:
+                continue
 
-            #     # check for a multi-line comment that is actually a version match
-            #     commentLines = [real_line for real_line in comment.split('\n') if real_line]
-            #     print('commentLines' + comment)
-            #     substrings = []
-            #     # '-1' on following line is because we don't need to check the last comment line again.
-            #     # (we just checked it above.)
-            #     for i in range(len(commentLines) - 1):
-            #         substrings.append('\n'.join(commentLines[i:len(commentLines)]))
-            #     for substring in substrings:
-            #         sys.stderr.write("\n----- Trying substring = " + substring)
+            if histRegex.search(next_line):
+                index += 1
+                continue
 
-            #         result = histRegex.search(substring)
-            #         if result:
-            #             # we have a new match
+            line += next_line
+            line = re.sub(r"\(Changelist: .+\)", ' ', line)
+            result = histRegex.search(line)
+            if result:
+                action = result.group("action")
+                origFile = result.group("from")
+                to = result.group("to")
+                author = result.group("author")
+                version = result.group("version")
+                timestamp = result.group("timestamp")
 
-            #             # pull off end part of comment that we're recording as a version
-            #             if i == 0:
-            #                 # using the entire comment
-            #                 comment = None
-            #             # else:
-            #             #     # leaving behind the previous comment
-            #             #     comment = '\n'.join(commentLines[0:i - 1])
+                if version == previous_version:
+                    index += 1
+                    continue
 
-            #             # if bFoundOne:
-            #             #     # before processing this match, we need to commit the previously found version
-            #             #     versionList.append((timestamp, action, origFile, int(version), author, comment, data))
-            #             # set bFoundOne once we've found our first version
-            #             bFoundOne = True
-            #             action = result.group("action")
-            #             origFile = result.group("from")
-            #             to = result.group("to")
-            #             author = result.group("author")
-            #             version = result.group("version")
-            #             timestamp = result.group("timestamp")
-            #             # reset comment
-            #             comment = None
-            #             if origFile and to:
-            #                 # we're in a rename/move scenario
-            #                 data = to
-            #             else:
-            #                 # we're (possibly) in a branch scenario
-            #                 data = result.group("data")
+                previous_version = version
 
-            #             sys.stderr.write("\n******* comment match! action = '" + str(action) + "' comment = '" + str(comment) + "'")
-            #             break
+                try:
+                    comment_line = lines[index + 1]
+                    comment = re.sub("^ Comments \- ", "", comment_line, count=1)
+                except IndexError:
+                    comment = None
 
-    # before moving on, we need to commit the last found version
-    if bFoundOne:
-        versionList.append((timestamp, action, origFile, int(version), author, comment, data))
+                try:
+                    time.strptime(timestamp, "%m/%d/%Y %I:%M %p")
+                except ValueError:
+                    index += 1
+                    continue
 
-    #sys.stderr.write("\nreturning versionList = " + str(versionList))
+                if origFile and to:
+                    # we're in a rename/move scenario
+                    data = to
+                else:
+                    # we're (possibly) in a branch scenario
+                    data = result.group("data")
+
+                print(version, ':-----', timestamp, action, origFile, version, author, comment)
+                versionList.append((timestamp, action, origFile,
+                                    int(version), author, comment, data))
+        index += 1
 
     return versionList
 
@@ -327,7 +364,7 @@ def add_record_to_database(record, database):
          origPath, version, author, comment, data) = record.get_tuple()
         # print(record.get_tuple())
         c.execute('''INSERT INTO operations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (timestamp, action, mainline, branch, path, origPath, version, author, '', data))
+                  (timestamp, action, mainline, branch, path, origPath, version, author, comment, data))
     except sqlite3.IntegrityError as e:
         # TODO is there a better way to detect duplicates?  is sqlite3.IntegrityError too wide a net?
         #sys.stderr.write("\nDetected duplicate record %s" % str(record.get_tuple()))
@@ -354,21 +391,21 @@ def cmd_parse(mainline, path, database):
         sys.stderr.write("\n[*] Parsing branch '%s' ..." % branch)
 
         for fullPathWalk in filesToWalk:
-            sys.stderr.write("\n[*] \tParsing file '%s' ..." % fullPathWalk)
-
             # Pathing was being pulled out but never used
-            realPath = fullPathWalk.split('current')[0]
+            realPath = re.split(r'\s{2,}current', fullPathWalk)[0]
+            # realPath = fullPathWalk.split('current')[0].strip()
             pathWalk, fileWalk = os.path.split(realPath)
+            pathWalk = pathWalk + '/'
+
+            sys.stderr.write("\n[*] \tParsing path:%s \tfile:%s\n" % (pathWalk, fileWalk))
 
             versions = find_all_file_versions(mainline, branch, fullPathWalk)
 
             for (timestamp, action, origPath, version,
                  author, comment, data) in versions:
-
                 # Renamed and moved are breaking in our case.
-                # Also, share and break share are not git or mother approved
-                if (action == 'renamed' or action == 'moved' or
-                   action == 'share' or action == 'break share'):
+                # Also, share and break share are neither git nor mother approved
+                if actionMap[action] is None:
                     continue
 
                 epoch = int(time.mktime(time.strptime(
@@ -447,24 +484,35 @@ def print_blob_for_file(branch, fullPath, version=None):
     global mark
 
     path, file = os.path.split(fullPath)
-    localPath = os.path.join(scratchDir, file)
-    if os.path.isfile(localPath):
-        os.remove(localPath)
+    localPath = os.path.join(path, file).strip()
+    # if os.path.isfile(localPath):
+    #     os.remove(localPath)
+
     if version:
         # get specified version
-        cmd = 'sscm get "%s" -b"%s" -p"%s" -d"%s" -f -i -v%d' % (file, branch, path, scratchDir, version)
+        cmd = 'sscm get "%s" -b"%s" -p"sites/borgwarner.com/eFPS/1/html/%s" -d"./%s" -f -i -v%d' % (
+            file, branch, path, path, version)
     else:
         # get newest version
-        cmd = 'sscm get "%s" -b"%s" -p"%s" -d"%s" -f -i' % (file, branch, path, scratchDir)
-    with open(os.devnull, 'w') as fnull:
-        subprocess.Popen(cmd, shell=True, stdout=fnull, stderr=fnull).communicate()
+        cmd = 'sscm get "%s" -b"%s" -p"sites/borgwarner.com/eFPS/1/html/%s" -d"./%s" -f -i' % (
+            file, branch, path, path)
+
+    sys.stderr.write("\n[*]cmd: %s" % (cmd))
+
+    (out, err) = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+    if err:
+        sys.stderr.write("\n[>]\terr: %s" % (err))
+        return None
 
     mark = mark + 1
     print("blob")
     print("mark :%d" % mark)
-    print("data %d" % os.path.getsize(localPath))
-    with open(localPath, "rb") as f:
-        print(f.read())
+    print("data %s" % os.path.getsize(localPath))
+
+    f = open(localPath, "rb")
+    print(f.read())
+    f.close()
+
     return mark
 
 
@@ -542,7 +590,10 @@ def process_database_record(record):
         # this is the usual case
 
         if record.action == Actions.FILE_MODIFY:
-            blobMark = print_blob_for_file(record.branch, record.path, record.version)
+            blobMark = print_blob_for_file(record.branch, record.origPath + record.path, record.version)
+
+            if blobMark is None:
+                return
 
         mark = mark + 1
         print("commit refs/heads/%s" % translate_branch_name(record.branch))
@@ -558,15 +609,15 @@ def process_database_record(record):
         if record.action == Actions.FILE_MODIFY:
             if record.origPath:
                 # looks like there was a previous rename.  use the original name.
-                print("M 100644 :%d %s" % (blobMark, record.origPath))
+                print("M 100644 :%d %s" % (blobMark, record.origPath + record.path))
             else:
                 # no previous rename.  good to use the current name.
                 print("M 100644 :%d %s" % (blobMark, record.path))
         elif record.action == Actions.FILE_DELETE:
-            print("D %s" % record.path)
+            print("D %s" % record.origPath + record.path)
         elif record.action == Actions.FILE_RENAME:
             # NOTE we're not using record.path here, as there may have been multiple renames in the file's history
-            print("R %s %s" % (record.origPath, record.data))
+            print("R %s %s" % (record.origPath + record.path, record.data))
         else:
             # this is a branch operation
             if record.data:
@@ -589,7 +640,7 @@ def get_next_database_record(database, c):
 
 def cmd_export(database):
     sys.stderr.write("\n[+] Beginning export phase...\n")
-
+    database = sqlite3.connect(database)
     count = 0
     c, record = get_next_database_record(database, None)
     count = count + 1
