@@ -252,6 +252,8 @@ def find_all_file_versions(mainline, branch, path):
     lines = get_lines_from_sscm_cmd(cmd)
     lines = lines[4:len(lines)]
     for line in lines:
+        # The changelist info gets added into the history which messes
+        # with the rest of the matches. Just remove it.
         line = re.sub(r"\(Changelist: .+\)", ' ', line)
 
         result = histRegex.search(line)
