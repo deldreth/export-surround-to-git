@@ -58,8 +58,12 @@ import shutil
 scratchDir = "scratch/"
 
 # for efficiency, compile the history regex once beforehand
-histRegex = re.compile(r"^(?P<action>[\w]+([^\[\]\r\n]*[\w]+)?)(\[(?P<data>[^\[\]\r\n]*?)( v\. [\d]+)?\]| from \[(?P<from>[^\[\]\r\n]*)\] to \[(?P<to>[^\[\]\r\n]*)\])?([\s]+)(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)([\s]+)(?P<version>[\d]+)([\s]+)(?P<timestamp>[\w]+[^\[\]\r\n]*)$", re.MULTILINE | re.DOTALL)
+# histRegex = re.compile(r"^(?P<action>[\w]+([^\[\]\r\n]*[\w]+)?)(\[(?P<data>[^\[\]\r\n]*?)( v\. [\d]+)?\]| from \[(?P<from>[^\[\]\r\n]*)\] to \[(?P<to>[^\[\]\r\n]*)\])?([\s]+)(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)([\s]+)(?P<version>[\d]+)([\s]+)(?P<timestamp>[\w]+[^\[\]\r\n]*)$", re.MULTILINE | re.DOTALL)
+# histRegex = re.compile(r"^(?P<action>[\w]+([^\[\]\r\n]*[\w]+)?)\s{2,}(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)[\s]+(?P<version>[\d]+)[\s]+(?P<timestamp>[0-9]{1,2}/[0-9]{1,2}/[0-9]{1,4} [0-9]{1,2}\:[0-9]{1,2} [AaPp][Mm])$", re.MULTILINE | re.DOTALL)
+histRegex = re.compile(r"^(?P<action>[\w]+([^\[\]\r\n]*[\w]+)?)\s(?P<changelist>\(Changelist: .*\)[^\[\]\r\n]*)?(\[(?P<data>[^\[\]\r\n]*?)( v\. [\d]+)?\]| from \[(?P<from>[^\[\]\r\n]*)\] to \[(?P<to>[^\[\]\r\n]*)\])?\s{5,}(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)\s+(?P<version>[\d]+)\s+(?P<timestamp>[0-9]{1,2}/[0-9]{1,2}/[0-9]{1,4} [0-9]{1,2}\:[0-9]{1,2} [AP][M])(?P<comment>\n Comments \- .*)?$", re.MULTILINE)
 
+# The partial_regex is used for matching comments, see get_all_comments
+partial_regex = re.compile(r"(?P<action>[\w]+?)\s{10,}(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)")
 # global "mark" number.  incremented before used, as 1 is minimum value allowed.
 mark = 0
 
@@ -161,6 +165,13 @@ def get_lines_from_sscm_cmd(sscm_cmd):
     return [real_line for real_line in stdoutdata.split('\n') if real_line]
 
 
+def get_fulllines_from_sscm_cmd(sscm_cmd):
+    p = subprocess.Popen(sscm_cmd, shell=True, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE)
+    stdoutdata, stderrdata = p.communicate()
+    return stdoutdata
+
+
 def find_all_branches_in_mainline_containing_path(mainline, path):
     # pull out lines from `lsbranch` that are of type baseline, mainline, or snapshot.
     # no sense in adding the `-d` switch, as `sscm ls` won't list anything for deleted branches.
@@ -197,42 +208,37 @@ def is_snapshot_branch(branch, repo):
         result = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=fnull).communicate()[0]
     return result.find("snapshot") != -1
 
-# def parse_the_line(matching_regex):
-#     bFoundOne = True
-#     action = result.group("action")
-#     origFile = result.group("from")
-#     to = result.group("to")
-#     author = result.group("author")
-#     version = result.group("version")
-#     timestamp = result.group("timestamp")
 
-#     if version == previous_version:
-#         index += 1
-#         continue
+def get_all_comments(lines, index):
+    try:
+        comment_line = re.match("^ Comments \- ", lines[index])
+    except IndexError:
+        return None
 
-#     print ("\n Versions %s <=> %s" % (previous_version, version))
-#     previous_version = version
+    if not comment_line:
+        return None
 
-#     try:
-#         comment_line = lines[index + 1]
-#         comment = re.sub("^ Comments \- ", "", comment_line, count=1)
-#     except IndexError:
-#         comment = None
+    comments = ''
+    while True:
+        try:
+            line = lines[index]
+        except IndexError:
+            break
 
-#     try:
-#         time.strptime(timestamp, "%m/%d/%Y %I:%M %p")
-#     except ValueError:
-#         bFoundOne = False
+        history = histRegex.search(line)
+        history_line2 = re.search(r'\s{38,}', line)
+        partial_history = partial_regex.search(line)
+        share_history = re.search(r'^share\[', line)
 
-#     if origFile and to:
-#         # we're in a rename/move scenario
-#         data = to
-#     else:
-#         # we're (possibly) in a branch scenario
-#         data = result.group("data")
+        if history or history_line2 or partial_history or share_history:
+            break
+        else:
+            line = re.sub(r"^ Comments \- ", "", line)
+            comments += line + ' '
+            index += 1
 
-#     versionList.append((timestamp, action, origFile,
-#                         int(version), author, comment, data))
+    comments = re.sub(r'[^\x00-\x7F]+', '', comments)
+    return comments.strip()
 
 
 def find_all_file_versions(mainline, branch, path):
@@ -244,108 +250,45 @@ def find_all_file_versions(mainline, branch, path):
 
     # this is complicated because the comment for a check-in will be on the line *following* a regex match
     versionList = []
-    comment = None
-    bFoundOne = False
     previous_version = None
-    index = 0
 
-    lines = get_lines_from_sscm_cmd(cmd)
-    lines = lines[4:len(lines)]
-    for line in lines:
-        # The changelist info gets added into the history which messes
-        # with the rest of the matches. Just remove it.
-        line = re.sub(r"\(Changelist: .+\)", ' ', line)
+    history = get_fulllines_from_sscm_cmd(cmd)
+    for match in histRegex.finditer(history):
+        action = match.group("action")
+        origFile = match.group("from")
+        to = match.group("to")
+        author = match.group("author")
+        version = match.group("version")
+        timestamp = match.group("timestamp")
 
-        result = histRegex.search(line)
-        if result:
-            action = result.group("action")
-            origFile = result.group("from")
-            to = result.group("to")
-            author = result.group("author")
-            version = result.group("version")
-            timestamp = result.group("timestamp")
-
-            if version == previous_version:
-                index += 1
-                continue
-
-            previous_version = version
-
-            try:
-                comment_line = lines[index + 1]
-                comment = re.sub("^ Comments \- ", "", comment_line, count=1)
-            except IndexError:
-                comment = None
-
-            try:
-                time.strptime(timestamp, "%m/%d/%Y %I:%M %p")
-            except ValueError:
-                index += 1
-                continue
-
-            if origFile and to:
-                # we're in a rename/move scenario
-                data = to
-            else:
-                # we're (possibly) in a branch scenario
-                data = result.group("data")
-
-            print(version, ':', timestamp, action, origFile, version, author, comment)
-            versionList.append((timestamp, action, origFile,
-                                int(version), author, comment, data))
+        comment = match.group("comment")
+        if comment:
+            comment = re.sub(r'^\n Comments \- ', '', comment)
+            comment = comment.strip()
         else:
-            try:
-                next_line = lines[index + 1]
-            except IndexError:
-                continue
+            comment = ''
 
-            if histRegex.search(next_line):
-                index += 1
-                continue
+        if previous_version == version:
+            (prev_timestamp, prev_action, prev_origFile, prev_version,
+             prev_author, prev_comment, prev_data) = versionList.pop()
 
-            line += next_line
-            line = re.sub(r"\(Changelist: .+\)", ' ', line)
-            result = histRegex.search(line)
-            if result:
-                action = result.group("action")
-                origFile = result.group("from")
-                to = result.group("to")
-                author = result.group("author")
-                version = result.group("version")
-                timestamp = result.group("timestamp")
+            comment = prev_comment + ' ' + comment
 
-                if version == previous_version:
-                    index += 1
-                    continue
+            versionList.append((prev_timestamp, prev_action, prev_origFile,
+                                prev_version, prev_author, comment, prev_data))
+            continue
 
-                previous_version = version
+        if origFile and to:
+            # we're in a rename/move scenario
+            data = to
+        else:
+            # we're (possibly) in a branch scenario
+            data = match.group("data")
 
-                try:
-                    comment_line = lines[index + 1]
-                    comment = re.sub("^ Comments \- ", "", comment_line, count=1)
-                except IndexError:
-                    comment = None
-
-                try:
-                    time.strptime(timestamp, "%m/%d/%Y %I:%M %p")
-                except ValueError:
-                    index += 1
-                    continue
-
-                if origFile and to:
-                    # we're in a rename/move scenario
-                    data = to
-                else:
-                    # we're (possibly) in a branch scenario
-                    data = result.group("data")
-
-                print(version, ':-----', timestamp, action, origFile, version, author, comment)
-                versionList.append((timestamp, action, origFile,
-                                    int(version), author, comment, data))
-        index += 1
-
+        previous_version = match.group('version')
+        versionList.append((timestamp, action, origFile,
+                            int(version), author, comment, data))
     return versionList
-
 
 def create_database():
     # database file is created in cwd
@@ -492,11 +435,11 @@ def print_blob_for_file(branch, fullPath, version=None):
 
     if version:
         # get specified version
-        cmd = 'sscm get "%s" -b"%s" -p"sites/borgwarner.com/eFPS/1/html/%s" -d"./%s" -f -i -v%d' % (
+        cmd = 'sscm get "%s" -b"%s" -p"sites/techlinksvc/2/html/%s" -d"./%s" -f -i -v%d' % (
             file, branch, path, path, version)
     else:
         # get newest version
-        cmd = 'sscm get "%s" -b"%s" -p"sites/borgwarner.com/eFPS/1/html/%s" -d"./%s" -f -i' % (
+        cmd = 'sscm get "%s" -b"%s" -p"sites/techlinksvc/2/html/%s" -d"./%s" -f -i' % (
             file, branch, path, path)
 
     sys.stderr.write("\n[*]cmd: %s" % (cmd))
