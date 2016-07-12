@@ -11,6 +11,14 @@ like handling renames and deletes (https://github.com/JElchison/export-surround-
 are not handled by these changes. We accepted and were tolerant of limited history as part 
 of our migration from Seapine Surround.
 
+Current usage example for this fork
+```
+export-surround-to-git.py parse -m sites -p "repo"
+export-surround-to-git.py -m sites -p "repo" export -d database.db | git fast-import
+sqlite3 database.db
+sqlite3 > UPDATE operations SET origPath = REPLACE(origPath, 'repo', '');
+```
+
 # Usage
 ```
 usage: export-surround-to-git.py [-h] [-m MAINLINE] [-p PATH] [-d DATABASE]
