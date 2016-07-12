@@ -1,5 +1,11 @@
 #!/usr/bin/env python
 
+# Example usage
+# export-surround-to-git.py parse -m sites -p "repo"
+# export-surround-to-git.py -m sites -p "repo" export -d database.db | git fast-import
+# sqlite3 database.db
+# sqlite3 > UPDATE operations SET origPath = REPLACE(origPath, 'repo', '');
+
 # export-surround-to-git.py
 #
 # Python script to export history from Seapine Surround in a format parsable by `git fast-import`
@@ -435,11 +441,11 @@ def print_blob_for_file(branch, fullPath, version=None):
 
     if version:
         # get specified version
-        cmd = 'sscm get "%s" -b"%s" -p"sites/techlinksvc/2/html/%s" -d"./%s" -f -i -v%d' % (
+        cmd = 'sscm get "%s" -b"%s" -p"sites/broadskywireless.com/1/html/api/%s" -d"./%s" -f -i -v%d' % (
             file, branch, path, path, version)
     else:
         # get newest version
-        cmd = 'sscm get "%s" -b"%s" -p"sites/techlinksvc/2/html/%s" -d"./%s" -f -i' % (
+        cmd = 'sscm get "%s" -b"%s" -p"sites/broadskywireless.com/1/html/api/%s" -d"./%s" -f -i' % (
             file, branch, path, path)
 
     sys.stderr.write("\n[*]cmd: %s" % (cmd))
