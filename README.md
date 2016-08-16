@@ -11,7 +11,9 @@ like handling renames and deletes (https://github.com/JElchison/export-surround-
 are not handled by these changes. We accepted and were tolerant of limited history as part 
 of our migration from Seapine Surround.
 
-Current usage example for this fork
+Current usage example for this fork.
+Be sure to GET the repo from surround that you're planning on migrating.
+
 ```
 export-surround-to-git.py parse -m sites -p "repo"
 export-surround-to-git.py -m sites -p "repo" export -d database.db | git fast-import
