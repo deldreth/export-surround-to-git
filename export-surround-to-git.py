@@ -1,5 +1,17 @@
 #!/usr/bin/env python
 
+# attempt to support both Python2.6+ and Python3
+from __future__ import print_function
+import sys
+import argparse
+import subprocess
+import re
+import time
+import datetime
+import sqlite3
+import os
+import shutil
+
 # Example usage
 # export-surround-to-git.py parse -m sites -p "repo"
 # export-surround-to-git.py -m sites -p "repo" export -d database.db | git fast-import
@@ -27,10 +39,6 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 
-# attempt to support both Python2.6+ and Python3
-from __future__ import print_function
-
-
 VERSION = '0.5.0'
 
 
@@ -44,18 +52,6 @@ VERSION = '0.5.0'
 #   * sscm command-line client version:  2015.1.1 Build 24 (Mac OS X/Intel 64)
 #   * Git version 1.9.1
 
-
-import sys
-import argparse
-import subprocess
-import re
-import time
-import datetime
-import sqlite3
-import os
-import shutil
-
-
 #
 # globals
 #
@@ -66,11 +62,14 @@ scratchDir = "scratch/"
 # for efficiency, compile the history regex once beforehand
 # histRegex = re.compile(r"^(?P<action>[\w]+([^\[\]\r\n]*[\w]+)?)(\[(?P<data>[^\[\]\r\n]*?)( v\. [\d]+)?\]| from \[(?P<from>[^\[\]\r\n]*)\] to \[(?P<to>[^\[\]\r\n]*)\])?([\s]+)(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)([\s]+)(?P<version>[\d]+)([\s]+)(?P<timestamp>[\w]+[^\[\]\r\n]*)$", re.MULTILINE | re.DOTALL)
 # histRegex = re.compile(r"^(?P<action>[\w]+([^\[\]\r\n]*[\w]+)?)\s{2,}(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)[\s]+(?P<version>[\d]+)[\s]+(?P<timestamp>[0-9]{1,2}/[0-9]{1,2}/[0-9]{1,4} [0-9]{1,2}\:[0-9]{1,2} [AaPp][Mm])$", re.MULTILINE | re.DOTALL)
-histRegex = re.compile(r"^(?P<action>[\w]+([^\[\]\r\n]*[\w]+)?)\s(?P<changelist>\(Changelist: .*\)[^\[\]\r\n]*)?(\[(?P<data>[^\[\]\r\n]*?)( v\. [\d]+)?\]| from \[(?P<from>[^\[\]\r\n]*)\] to \[(?P<to>[^\[\]\r\n]*)\])?\s{5,}(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)\s+(?P<version>[\d]+)\s+(?P<timestamp>[0-9]{1,2}/[0-9]{1,2}/[0-9]{1,4} [0-9]{1,2}\:[0-9]{1,2} [AP][M])(?P<comment>\n Comments \- .*)?$", re.MULTILINE)
+histRegex = re.compile(
+    r"^(?P<action>[\w]+([^\[\]\r\n]*[\w]+)?)\s(?P<changelist>\(Changelist: .*\)[^\[\]\r\n]*)?(\[(?P<data>[^\[\]\r\n]*?)( v\. [\d]+)?\]| from \[(?P<from>[^\[\]\r\n]*)\] to \[(?P<to>[^\[\]\r\n]*)\])?\s{5,}(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)\s+(?P<version>[\d]+)\s+(?P<timestamp>[0-9]{1,2}/[0-9]{1,2}/[0-9]{1,4} [0-9]{1,2}\:[0-9]{1,2} [AP][M])(?P<comment>\n Comments \- .*)?$", re.MULTILINE)
 
 # The partial_regex is used for matching comments, see get_all_comments
-partial_regex = re.compile(r"(?P<action>[\w]+?)\s{10,}(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)")
-# global "mark" number.  incremented before used, as 1 is minimum value allowed.
+partial_regex = re.compile(
+    r"(?P<action>[\w]+?)\s{10,}(?P<author>[\w]+([^\[\]\r\n]*[\w]+)?)")
+# global "mark" number.  incremented before used, as 1 is minimum value
+# allowed.
 mark = 0
 
 # local time zone
@@ -81,6 +80,8 @@ timezone = "-0500"
 tagDict = {}
 
 # actions enumeration
+
+
 class Actions:
     BRANCH_SNAPSHOT = 1
     BRANCH_BASELINE = 2
@@ -90,41 +91,41 @@ class Actions:
 
 
 # map between Surround action and Action enum
-actionMap = {"add"                   : Actions.FILE_MODIFY,
-             "add to repository"     : Actions.FILE_MODIFY,
-             "add to branch"         : None,
-             "add from branch"       : Actions.FILE_MODIFY,
-             "attach to issue"       : None,  # TODO maybe use lightweight Git tag to track this
-             "attach to test case"   : None,  # TODO maybe use lightweight Git tag to track this
-             "attach to requirement" : None,  # TODO maybe use lightweight Git tag to track this
-             "attach to observation" : None,  # TODO maybe use lightweight Git tag to track this
-             "attach to external"    : None,  # TODO maybe use lightweight Git tag to track this
-             "attach to defect"      : None,
-             "break share"           : None,
-             "checkin"               : Actions.FILE_MODIFY,
-             "delete"                : Actions.FILE_DELETE,
-             "duplicate"             : Actions.FILE_MODIFY,
-             "file destroyed"        : Actions.FILE_DELETE,
-             "file moved"            : Actions.FILE_RENAME,
-             "file renamed"          : Actions.FILE_RENAME,
-             "in label"              : None,  # TODO maybe treat this like a snapshot branch
-             "label"                 : None,  # TODO maybe treat this like a snapshot branch
-             "moved"                 : Actions.FILE_RENAME,
-             "promote"               : None,
-             "promote from"          : Actions.FILE_MODIFY,
-             "promote to"            : Actions.FILE_MODIFY,
-             "rebase from"           : Actions.FILE_MODIFY,
-             "rebase with merge"     : Actions.FILE_MODIFY,
-             "remove"                : Actions.FILE_DELETE,
-             "renamed"               : Actions.FILE_RENAME,
-             "repo destroyed"        : None,  # TODO might need to be Actions.FILE_DELETE
-             "repo moved"            : None,  # TODO might need to be Actions.FILE_DELETE
-             "repo renamed"          : None,  # TODO might need to be Actions.FILE_DELETE
-             "restore"               : Actions.FILE_MODIFY,
-             "share"                 : None,
-             "rollback file"         : Actions.FILE_MODIFY,
-             "rollback rebase"       : Actions.FILE_MODIFY,
-             "rollback promote"      : Actions.FILE_MODIFY}
+actionMap = {"add": Actions.FILE_MODIFY,
+             "add to repository": Actions.FILE_MODIFY,
+             "add to branch": None,
+             "add from branch": Actions.FILE_MODIFY,
+             "attach to issue": None,  # TODO maybe use lightweight Git tag to track this
+             "attach to test case": None,  # TODO maybe use lightweight Git tag to track this
+             "attach to requirement": None,  # TODO maybe use lightweight Git tag to track this
+             "attach to observation": None,  # TODO maybe use lightweight Git tag to track this
+             "attach to external": None,  # TODO maybe use lightweight Git tag to track this
+             "attach to defect": None,
+             "break share": None,
+             "checkin": Actions.FILE_MODIFY,
+             "delete": Actions.FILE_DELETE,
+             "duplicate": Actions.FILE_MODIFY,
+             "file destroyed": Actions.FILE_DELETE,
+             "file moved": Actions.FILE_RENAME,
+             "file renamed": Actions.FILE_RENAME,
+             "in label": None,  # TODO maybe treat this like a snapshot branch
+             "label": None,  # TODO maybe treat this like a snapshot branch
+             "moved": Actions.FILE_RENAME,
+             "promote": None,
+             "promote from": Actions.FILE_MODIFY,
+             "promote to": Actions.FILE_MODIFY,
+             "rebase from": Actions.FILE_MODIFY,
+             "rebase with merge": Actions.FILE_MODIFY,
+             "remove": Actions.FILE_DELETE,
+             "renamed": Actions.FILE_RENAME,
+             "repo destroyed": None,  # TODO might need to be Actions.FILE_DELETE
+             "repo moved": None,  # TODO might need to be Actions.FILE_DELETE
+             "repo renamed": None,  # TODO might need to be Actions.FILE_DELETE
+             "restore": Actions.FILE_MODIFY,
+             "share": None,
+             "rollback file": Actions.FILE_MODIFY,
+             "rollback rebase": Actions.FILE_MODIFY,
+             "rollback promote": Actions.FILE_MODIFY}
 
 
 #
@@ -133,7 +134,8 @@ actionMap = {"add"                   : Actions.FILE_MODIFY,
 
 class DatabaseRecord:
     def __init__(self, tuple):
-        self.init(tuple[0], tuple[1], tuple[2], tuple[3], tuple[4], tuple[5], tuple[6], tuple[7], tuple[8], tuple[9])
+        self.init(tuple[0], tuple[1], tuple[2], tuple[3], tuple[
+                  4], tuple[5], tuple[6], tuple[7], tuple[8], tuple[9])
 
     def init(self, timestamp, action, mainline, branch, path, origPath, version, author, comment, data):
         self.timestamp = timestamp
@@ -161,8 +163,10 @@ def verify_surround_environment():
 
 
 def get_lines_from_sscm_cmd(sscm_cmd):
-    # helper function to clean each item on a line since sscm has lots of newlines
-    p = subprocess.Popen(sscm_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # helper function to clean each item on a line since sscm has lots of
+    # newlines
+    p = subprocess.Popen(sscm_cmd, shell=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdoutdata, stderrdata = p.communicate()
     stderrdata = stderrdata.strip()
     if stderrdata:
@@ -180,11 +184,14 @@ def get_fulllines_from_sscm_cmd(sscm_cmd):
 
 def find_all_branches_in_mainline_containing_path(mainline, path):
     # pull out lines from `lsbranch` that are of type baseline, mainline, or snapshot.
-    # no sense in adding the `-d` switch, as `sscm ls` won't list anything for deleted branches.
-    cmd = 'sscm lsbranch -b"%s" -p"%s" | sed -r \'s/ \((baseline|mainline|snapshot)\)$//g\'' % (mainline, path)
+    # no sense in adding the `-d` switch, as `sscm ls` won't list anything for
+    # deleted branches.
+    cmd = 'sscm lsbranch -b"%s" -p"%s" | /usr/local/bin/sed -r \'s/ \((baseline|mainline|snapshot)\)$//g\'' % (
+        mainline, path)
     # FTODO this command yields branches that don't include the path specified.
     # should we filter them out here?  may increase efficiency to not deal with them later.
-    # NOTE: don't use '-f' with this command, as it really restricts overall usage.
+    # NOTE: don't use '-f' with this command, as it really restricts overall
+    # usage.
     return get_lines_from_sscm_cmd(cmd)
 
 
@@ -194,10 +201,12 @@ def find_all_files_in_branches_under_path(mainline, branches, path):
         sys.stderr.write("\n[*] Looking for files in branch '%s' ..." % branch)
 
         # use all lines from `ls` except for a few
-        cmd = 'sscm ls -b"%s" -p"%s" -r | grep -v \'Total listed files\' | sed -r \'s/unknown status.*$//g\'' % (branch, path)
+        cmd = 'sscm ls -b"%s" -p"%s" -r | grep -v \'Total listed files\' |  /usr/local/bin/sed -r \'s/unknown status.*$//g\'' % (
+            branch, path)
         lines = get_lines_from_sscm_cmd(cmd)
 
-        # directories are listed on their own line, before a section of their files
+        # directories are listed on their own line, before a section of their
+        # files
         for line in lines:
             if line[0] != ' ':
                 lastDirectory = line
@@ -211,7 +220,8 @@ def is_snapshot_branch(branch, repo):
     # TODO can we eliminate 'repo' as an argument to this function?
     cmd = 'sscm branchproperty -b"%s" -p"%s"' % (branch, repo)
     with open(os.devnull, 'w') as fnull:
-        result = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=fnull).communicate()[0]
+        result = subprocess.Popen(
+            cmd, shell=True, stdout=subprocess.PIPE, stderr=fnull).communicate()[0]
     return result.find("snapshot") != -1
 
 
@@ -254,7 +264,8 @@ def find_all_file_versions(mainline, branch, path):
 
     cmd = 'sscm history "%s" -b"%s" -p"%s"' % (file, branch, repo)
 
-    # this is complicated because the comment for a check-in will be on the line *following* a regex match
+    # this is complicated because the comment for a check-in will be on the
+    # line *following* a regex match
     versionList = []
     previous_version = None
 
@@ -296,11 +307,14 @@ def find_all_file_versions(mainline, branch, path):
                             int(version), author, comment, data))
     return versionList
 
+
 def create_database():
     # database file is created in cwd
-    name = datetime.datetime.fromtimestamp(time.time()).strftime('%Y%m%d%H%M%S') + '.db'
+    name = datetime.datetime.fromtimestamp(
+        time.time()).strftime('%Y%m%d%H%M%S') + '.db'
     database = sqlite3.connect(name)
-    database.text_factory = lambda x: unicode(x, 'utf-8', 'ignore')
+    # database.text_factory = lambda x: unicode(x, 'utf-8', 'ignore')
+    database.text_factory = str
     c = database.cursor()
     # we intentionally avoid duplicates via the PRIMARY KEY
     c.execute('''CREATE TABLE operations (timestamp INTEGER NOT NULL, action INTEGER NOT NULL, mainline TEXT NOT NULL, branch TEXT NOT NULL, path TEXT, origPath TEXT, version INTEGER, author TEXT, comment TEXT, data TEXT, PRIMARY KEY(action, mainline, branch, path, origPath, version, author, data))''')
@@ -323,7 +337,8 @@ def add_record_to_database(record, database):
     database.commit()
 
     if record.action == Actions.FILE_RENAME:
-        c.execute('''UPDATE operations SET origPath=? WHERE action=? AND mainline=? AND branch=? AND path=? AND (origPath IS NULL OR origPath='') AND version<=?''', (record.origPath, Actions.FILE_MODIFY, record.mainline, record.branch, record.path, record.version))
+        c.execute('''UPDATE operations SET origPath=? WHERE action=? AND mainline=? AND branch=? AND path=? AND (origPath IS NULL OR origPath='') AND version<=?''',
+                  (record.origPath, Actions.FILE_MODIFY, record.mainline, record.branch, record.path, record.version))
         database.commit()
 
 
@@ -348,14 +363,16 @@ def cmd_parse(mainline, path, database):
             pathWalk, fileWalk = os.path.split(realPath)
             pathWalk = pathWalk + '/'
 
-            sys.stderr.write("\n[*] \tParsing path:%s \tfile:%s\n" % (pathWalk, fileWalk))
+            sys.stderr.write(
+                "\n[*] \tParsing path:%s \tfile:%s\n" % (pathWalk, fileWalk))
 
             versions = find_all_file_versions(mainline, branch, fullPathWalk)
 
             for (timestamp, action, origPath, version,
                  author, comment, data) in versions:
                 # Renamed and moved are breaking in our case.
-                # Also, share and break share are neither git nor mother approved
+                # Also, share and break share are neither git nor mother
+                # approved
                 if actionMap[action] is None:
                     continue
 
@@ -372,7 +389,7 @@ def cmd_parse(mainline, path, database):
                             (epoch, branchAction,
                              mainline, branch, path,
                              None, version, author, comment, data)
-                            ),
+                        ),
                         database)
                 else:
                     add_record_to_database(
@@ -406,10 +423,12 @@ def translate_branch_name(name):
     name = re.sub(r'\.lock($|\/)', r'_lock', name)
     # 3. cannot have two consecutive dots ..  anywhere
     name = re.sub(r'[\.]+', r'_', name)
-    # 4. cannot have ASCII control characters (i.e. bytes whose values are lower than \040, or \177 DEL) anywhere
+    # 4. cannot have ASCII control characters (i.e. bytes whose values are
+    # lower than \040, or \177 DEL) anywhere
     for char in name:
         if char < '\040' or char == '\177':
-            # TODO I'm not sure that modifying 'char' here actually modifies 'name'.  Check this and fix if necessary.
+            # TODO I'm not sure that modifying 'char' here actually modifies
+            # 'name'.  Check this and fix if necessary.
             char = '_'
     # 4. cannot have space anywhere.
     # replace with dash for readability.
@@ -431,30 +450,36 @@ def translate_branch_name(name):
 
 
 # this is the function that prints most file data to the stream
-def print_blob_for_file(branch, fullPath, version=None):
+def print_blob_for_file(branch, fullPath, version=None, repoPath=None):
+    '''
+    Actually prints the blob for git fast-import. repoPath is the parsed path
+    of the cli arguments and is used to parse out the path from the database.
+    If repoPath is not passed to this function the resulting directory
+    structure will mimic the structure of the surround repo (which is not
+    at all ideal)
+    '''
     global mark
 
     path, file = os.path.split(fullPath)
-    localPath = os.path.join(path, file).strip()
-    # if os.path.isfile(localPath):
-    #     os.remove(localPath)
+    destination = '.' + path.replace(repoPath, '')
 
     if version:
-        # get specified version
-        cmd = 'sscm get "%s" -b"%s" -p"sites/broadskywireless.com/1/html/api/%s" -d"./%s" -f -i -v%d' % (
-            file, branch, path, path, version)
+        cmd = 'sscm get "%s" -b"%s" -p"%s" -d"%s" -f -i -v%d' % (
+            file, branch, path, destination, version)
     else:
-        # get newest version
-        cmd = 'sscm get "%s" -b"%s" -p"sites/broadskywireless.com/1/html/api/%s" -d"./%s" -f -i' % (
-            file, branch, path, path)
+        cmd = 'sscm get "%s" -b"%s" -p"%s" -d"%s" -f -i' % (
+            file, branch, path, destination)
 
     sys.stderr.write("\n[*]cmd: %s" % (cmd))
 
-    (out, err) = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+    (out, err) = subprocess.Popen(cmd, shell=True,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE).communicate()
     if err:
         sys.stderr.write("\n[>]\terr: %s" % (err))
         return None
 
+    localPath = destination + '/' + file
     mark = mark + 1
     print("blob")
     print("mark :%d" % mark)
@@ -467,32 +492,38 @@ def print_blob_for_file(branch, fullPath, version=None):
     return mark
 
 
-def process_database_record(record):
+def process_database_record(record, repoPath=None):
     global mark
 
     if record.action == Actions.BRANCH_SNAPSHOT:
         # the basic idea here is to use a "TAG_FIXUP" branch, as recommended in the manpage for git-fast-import.
         # this is necessary since Surround version-controls individual files, and Git controls the state of the entire branch.
-        # the purpose of this commit it to bring the branch state to match the snapshot exactly.
+        # the purpose of this commit it to bring the branch state to match the
+        # snapshot exactly.
 
         print("reset TAG_FIXUP")
         print("from refs/heads/%s" % translate_branch_name(record.branch))
 
         # get all files contained within snapshot
-        files = find_all_files_in_branches_under_path(record.mainline, [record.data], record.path)
+        files = find_all_files_in_branches_under_path(
+            record.mainline, [record.data], record.path)
         startMark = None
         for file in files:
-            blobMark = print_blob_for_file(record.data, file)
+            blobMark = print_blob_for_file(record.data, file, repoPath=repoPath)
             if not startMark:
-                # keep track of what mark represents the start of this snapshot data
+                # keep track of what mark represents the start of this snapshot
+                # data
                 startMark = blobMark
 
         mark = mark + 1
         print("commit TAG_FIXUP")
         print("mark :%d" % mark)
-        # we don't have the legit email addresses, so we just use the author as the email address
-        print("author %s <%s> %s %s" % (record.author, record.author, record.timestamp, timezone))
-        print("committer %s <%s> %s %s" % (record.author, record.author, record.timestamp, timezone))
+        # we don't have the legit email addresses, so we just use the author as
+        # the email address
+        print("author %s <%s> %s %s" %
+              (record.author, record.author, record.timestamp, timezone))
+        print("committer %s <%s> %s %s" %
+              (record.author, record.author, record.timestamp, timezone))
         if record.comment:
             print("data %d" % len(record.comment))
             print(record.comment)
@@ -507,12 +538,14 @@ def process_database_record(record):
             print("M 100644 :%d %s" % (iterMark, file))
             iterMark = iterMark + 1
         if iterMark != mark:
-            raise Exception("Marks fell out of sync while tagging '%s'." % record.data)
+            raise Exception(
+                "Marks fell out of sync while tagging '%s'." % record.data)
 
         # finally, tag our result
         print("tag %s" % translate_branch_name(record.data))
         print("from TAG_FIXUP")
-        print("tagger %s <%s> %s %s" % (record.author, record.author, record.timestamp, timezone))
+        print("tagger %s <%s> %s %s" %
+              (record.author, record.author, record.timestamp, timezone))
         if record.comment:
             print("data %d" % len(record.comment))
             print(record.comment)
@@ -523,7 +556,8 @@ def process_database_record(record):
         tagDict[translate_branch_name(record.data)] = mark
 
     elif record.action == Actions.BRANCH_BASELINE:
-        # the idea hers is to simply 'reset' to create our new branch, the name of which is contained in the 'data' field
+        # the idea hers is to simply 'reset' to create our new branch, the name
+        # of which is contained in the 'data' field
 
         print("reset refs/heads/%s" % translate_branch_name(record.data))
 
@@ -541,7 +575,8 @@ def process_database_record(record):
         # this is the usual case
 
         if record.action == Actions.FILE_MODIFY:
-            blobMark = print_blob_for_file(record.branch, record.origPath + record.path, record.version)
+            blobMark = print_blob_for_file(
+                record.branch, record.origPath + record.path, record.version, repoPath=repoPath)
 
             if blobMark is None:
                 return
@@ -549,8 +584,10 @@ def process_database_record(record):
         mark = mark + 1
         print("commit refs/heads/%s" % translate_branch_name(record.branch))
         print("mark :%d" % mark)
-        print("author %s <%s> %s %s" % (record.author, record.author, record.timestamp, timezone))
-        print("committer %s <%s> %s %s" % (record.author, record.author, record.timestamp, timezone))
+        print("author %s <%s> %s %s" %
+              (record.author, record.author, record.timestamp, timezone))
+        print("committer %s <%s> %s %s" %
+              (record.author, record.author, record.timestamp, timezone))
         if record.comment:
             print("data %d" % len(record.comment))
             print(record.comment)
@@ -559,21 +596,25 @@ def process_database_record(record):
 
         if record.action == Actions.FILE_MODIFY:
             if record.origPath:
-                # looks like there was a previous rename.  use the original name.
-                print("M 100644 :%d %s" % (blobMark, record.origPath + record.path))
+                # looks like there was a previous rename.  use the original
+                # name.
+                print("M 100644 :%d %s" %
+                      (blobMark, record.origPath + record.path))
             else:
                 # no previous rename.  good to use the current name.
                 print("M 100644 :%d %s" % (blobMark, record.path))
         elif record.action == Actions.FILE_DELETE:
             print("D %s" % record.origPath + record.path)
         elif record.action == Actions.FILE_RENAME:
-            # NOTE we're not using record.path here, as there may have been multiple renames in the file's history
+            # NOTE we're not using record.path here, as there may have been
+            # multiple renames in the file's history
             print("R %s %s" % (record.origPath + record.path, record.data))
         else:
             # this is a branch operation
             if record.data:
                 # record the other ancestor
-                print("merge refs/heads/%s" % translate_branch_name(record.data))
+                print("merge refs/heads/%s" %
+                      translate_branch_name(record.data))
     else:
         raise Exception("Unknown record action")
 
@@ -589,21 +630,22 @@ def get_next_database_record(database, c):
     return c, c.fetchone()
 
 
-def cmd_export(database):
+def cmd_export(database, repoPath=None):
     sys.stderr.write("\n[+] Beginning export phase...\n")
     database = sqlite3.connect(database)
+    database.text_factory = str
     count = 0
     c, record = get_next_database_record(database, None)
     count = count + 1
     while (record):
-        process_database_record(DatabaseRecord(record))
+        process_database_record(DatabaseRecord(record), repoPath=repoPath)
         c, record = get_next_database_record(database, c)
 
         count = count + 1
         # print progress every 10 operations
-        if count % 10 == 0:
-            # just print the date we're currently servicing
-            print("progress", time.strftime('%Y-%m-%d', time.localtime(record[0])))
+        # if count % 10 == 0:
+        # just print the date we're currently servicing
+        # print("progress", time.strftime('%Y-%m-%d', time.localtime(record[0])))
 
     # cleanup
     try:
@@ -611,10 +653,12 @@ def cmd_export(database):
     except OSError:
         pass
     if os.path.isfile("./.git/TAG_FIXUP"):
-        # TODO why doesn't this work?  is this too early since we're piping our output, and then `git fast-import` just creates it again?
+        # TODO why doesn't this work?  is this too early since we're piping our
+        # output, and then `git fast-import` just creates it again?
         os.remove("./.git/TAG_FIXUP")
 
-    sys.stderr.write("\n[+] Export complete.  Your new Git repository is ready to use.\nDon't forget to run `git repack` at some future time to improve data locality and access performance.\n\n")
+    sys.stderr.write(
+        "\n[+] Export complete.  Your new Git repository is ready to use.\nDon't forget to run `git repack` at some future time to improve data locality and access performance.\n\n")
 
 
 def cmd_verify(mainline, path):
@@ -633,7 +677,7 @@ def handle_command(parser):
         cmd_parse(args.mainline[0], args.path[0], database)
     elif args.command == "export" and args.database:
         verify_surround_environment()
-        cmd_export(args.database[0])
+        cmd_export(args.database[0], args.path[0])
     elif args.command == "all" and args.mainline and args.path:
         # typical case
         verify_surround_environment()
@@ -651,11 +695,16 @@ def handle_command(parser):
 
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(prog='export-surround-to-git.py', description='Exports history from Seapine Surround in a format parsable by `git fast-import`.', formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('-m', '--mainline', nargs=1, help='Mainline branch containing history to export')
-    parser.add_argument('-p', '--path', nargs=1, help='Path containing history to export')
-    parser.add_argument('-d', '--database', nargs=1, help='Path to local database (only used when resuming an export)')
-    parser.add_argument('--version', action='version', version='%(prog)s ' + VERSION)
+    parser = argparse.ArgumentParser(prog='export-surround-to-git.py',
+                                     description='Exports history from Seapine Surround in a format parsable by `git fast-import`.', formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('-m', '--mainline', nargs=1,
+                        help='Mainline branch containing history to export')
+    parser.add_argument('-p', '--path', nargs=1,
+                        help='Path containing history to export')
+    parser.add_argument('-d', '--database', nargs=1,
+                        help='Path to local database (only used when resuming an export)')
+    parser.add_argument('--version', action='version',
+                        version='%(prog)s ' + VERSION)
     parser.add_argument('command', nargs='?', default='all')
     parser.epilog = "Example flow:\n\tsscm setclient ...\n\tgit init my-new-repo\n\tcd my-new-repo\n\texport-surround-to-git.py -m Sandbox -p \"Sandbox/Merge Test\" -f blah.txt | git fast-import --stats --export-marks=marks.txt\n\t...\n\tgit repack ..."
     return parser
