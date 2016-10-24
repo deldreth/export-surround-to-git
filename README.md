@@ -18,13 +18,6 @@ per repo (in my cases).
 Current usage example for this fork.
 Be sure to GET the repo from surround that you're planning on migrating.
 
-```
-export-surround-to-git.py parse -m sites -p "repo"
-export-surround-to-git.py -m sites -p "repo" export -d database.db | git fast-import
-sqlite3 database.db
-sqlite3 > UPDATE operations SET origPath = REPLACE(origPath, 'repo', '');
-```
-
 # Usage
 ```
 usage: export-surround-to-git.py [-h] [-m MAINLINE] [-p PATH] [-d DATABASE]
