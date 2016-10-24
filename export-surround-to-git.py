@@ -509,7 +509,8 @@ def process_database_record(record, repoPath=None):
             record.mainline, [record.data], record.path)
         startMark = None
         for file in files:
-            blobMark = print_blob_for_file(record.data, file, repoPath=repoPath)
+            blobMark = print_blob_for_file(
+                record.data, file, repoPath=repoPath)
             if not startMark:
                 # keep track of what mark represents the start of this snapshot
                 # data
