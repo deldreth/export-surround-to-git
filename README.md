@@ -15,8 +15,10 @@ I also strongly recommend doing a directory diff. There are a few edge cases whe
 changed files in Surround may not actually be pulled. Generally this only occurs once or twice
 per repo (in my cases).
 
-Current usage example for this fork.
-Be sure to GET the repo from surround that you're planning on migrating.
+
+# Recursive GET the Repo from Surround
+The Surround CLI behaves strangely (i.e., won't work properly). If you do not GET
+the repo from Surround before running the migration. 
 
 # Usage
 ```
@@ -40,7 +42,7 @@ optional arguments:
   --version             show program's version number and exit
 ```
 
-## Example flow
+## Example Usage
 ```
 sscm setclient ...
 git init my-new-repo
