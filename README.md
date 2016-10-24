@@ -11,6 +11,10 @@ like handling renames and deletes (https://github.com/JElchison/export-surround-
 are not handled by these changes. We accepted and were tolerant of limited history as part 
 of our migration from Seapine Surround.
 
+I also strongly recommend doing a directory diff. There are a few edge cases where recently
+changed files in Surround may not actually be pulled. Generally this only occurs once or twice
+per repo (in my cases).
+
 Current usage example for this fork.
 Be sure to GET the repo from surround that you're planning on migrating.
 
@@ -48,7 +52,8 @@ optional arguments:
 sscm setclient ...
 git init my-new-repo
 cd my-new-repo
-export-surround-to-git.py -m Sandbox -p "Sandbox/Merge Test" | git fast-import --stats --export-marks=marks.txt
+export-surround-to-git.py parse -m surround-branch -p "repo"
+export-surround-to-git.py -m surround-branch -p "repo" export -d database.db | git fast-import
 ...
 git repack ...
 ```

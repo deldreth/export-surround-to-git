@@ -13,10 +13,10 @@ import os
 import shutil
 
 # Example usage
-# export-surround-to-git.py parse -m sites -p "repo"
+# export-surround-to-git.py parse -m surround-branch -p "repo"
 # export-surround-to-git.py -m sites -p "repo" export -d database.db | git fast-import
-# sqlite3 database.db
-# sqlite3 > UPDATE operations SET origPath = REPLACE(origPath, 'repo', '');
+
+# I have not tried to run the all method for this. 
 
 # export-surround-to-git.py
 #
