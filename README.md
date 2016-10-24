@@ -15,6 +15,12 @@ I also strongly recommend doing a directory diff. There are a few edge cases whe
 changed files in Surround may not actually be pulled. Generally this only occurs once or twice
 per repo (in my cases).
 
+### sed vs gnused
+Not all versions of `sed` are created equal. This script uses a specific absolute location
+for a Homebrew installed version of `gnused`. The macOS version of `sed` does not include a handle
+for the `-r` parameter. If you're running this on Linux you should be fine, but you may need to manually
+update the location of `sed` that this script uses.
+
 
 # Recursive GET the Repo from Surround
 The Surround CLI behaves strangely (i.e., won't work properly). If you do not GET
